@@ -1,0 +1,19 @@
+# 虚拟环境
+.venv/
+venv/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 测试报告和日志
+report/
+allure-results/
+log/
+
+# IDE 配置
+.idea/
+
+# 系统文件
+.DS_Store
+Thumbs.db
