@@ -1,0 +1,49 @@
+{
+  "openapi": "3.0.1",
+  "info": {"title": "RuoYi test", "version": "1.0"},
+  "paths": {
+    "/system/user/list": {
+      "get": {
+        "tags": ["用户管理"],
+        "summary": "查询用户列表",
+        "security": [{"Authorization": []}],
+        "parameters": [
+          {"name": "pageNum", "in": "query", "required": true, "schema": {"type": "integer"}},
+          {"name": "pageSize", "in": "query", "required": true, "schema": {"type": "integer"}},
+          {"name": "userName", "in": "query", "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "ok"}}
+      }
+    },
+    "/system/user": {
+      "post": {
+        "tags": ["用户管理"],
+        "summary": "新增用户",
+        "security": [{"Authorization": []}],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/SysUser"}
+            }
+          }
+        },
+        "responses": {"200": {"description": "ok"}}
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "SysUser": {
+        "type": "object",
+        "required": ["userName", "nickName", "password"],
+        "properties": {
+          "userName": {"type": "string", "example": "test_auto"},
+          "nickName": {"type": "string"},
+          "password": {"type": "string"},
+          "status": {"type": "string", "enum": ["0", "1"]},
+          "sex": {"type": "string", "enum": ["0", "1", "2"]}
+        }
+      }
+    }
+  }
+}
