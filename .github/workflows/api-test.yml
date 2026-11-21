@@ -1,0 +1,112 @@
+name: api-test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------
+  # Job 1：不依赖被测服务，只校验用例集能否被正确加载（永远能跑绿）
+  # ---------------------------------------------------------------
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Collect cases (24 条)
+        run: |
+          pytest testcases/test_runner.py --collect-only -q -o log_file= -o log_cli=false | tail -5
+          pytest testcases/test_runner.py --collect-only -q -o log_file= -o log_cli=false | grep -q "24 tests collected"
+
+  # ---------------------------------------------------------------
+  # Job 2：真跑接口用例。需要被测系统，仓库 Settings → Variables
+  # 里把 RUN_API_TESTS 设为 true 才触发（本地/无环境时不会红）
+  # ---------------------------------------------------------------
+  api-test:
+    if: vars.RUN_API_TESTS == 'true'
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: 123456
+          MYSQL_DATABASE: ry_vue
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p123456"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Init DB (若依建表脚本)
+        run: |
+          mysql -h 127.0.0.1 -uroot -p123456 ry_vue < sql/ry_vue.sql || echo "跳过：未提供 sql/ry_vue.sql"
+
+      - name: Disable captcha
+        run: |
+          mysql -h 127.0.0.1 -uroot -p123456 ry_vue \
+            -e "UPDATE sys_config SET config_value='false' WHERE config_key='sys.account.captchaEnabled';" \
+            || echo "跳过：库未初始化"
+
+      - name: Start RuoYi backend
+        run: |
+          # 需要私有化准备：把后端源码放在 backend/ 或用 docker compose 起
+          # docker compose -f docker-compose.test.yml up -d --wait
+          echo "TODO: 启动被测服务（8080），CI 里通常用 docker compose"
+
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/captchaImage | grep -q 200; then
+              echo "backend ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "backend not ready"; exit 1
+
+      - name: Run api tests
+        run: pytest testcases/test_runner.py -vs --alluredir=./report/json_report
+
+      - name: Allure report
+        if: always()
+        run: |
+          curl -sL -o allure.zip https://github.com/allure-framework/allure2/releases/download/2.29.0/allure-2.29.0.zip
+          unzip -q allure.zip
+          ./allure-2.29.0/bin/allure generate ./report/json_report -o ./report/html_report --clean
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: report/html_report
+          retention-days: 7
