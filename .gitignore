@@ -17,3 +17,5 @@ log/
 # ç³»ç»Ÿæ–‡ä»¶
 .DS_Store
 Thumbs.db
+# pytest »º´æ
+.pytest_cache/

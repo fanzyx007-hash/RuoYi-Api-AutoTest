@@ -6,7 +6,7 @@
 ![Allure](https://img.shields.io/badge/Report-Allure-FF6B6B)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-基于 **Pytest + Excel 数据驱动** 的接口自动化测试框架，对 [若依 RuoYi-Vue](https://gitee.com/y_project/RuoYi-Vue) 后台管理系统的**登录、用户管理、权限控制**链路做端到端验证，并对登录链路做过 JMeter 压测与瓶颈定位。
+基于 **Pytest + Excel 数据驱动** 的接口自动化测试框架，对 [若依 RuoYi-Vue](https://gitee.com/y_project/RuoYi-Vue) 后台管理系统的**登录、用户管理、权限控制**链路做端到端验证，并完成基准 / 分档负载 / 尖峰 / 混合场景 / 稳定性五类 JMeter 压测。
 
 ## 数据速览
 
@@ -16,7 +16,7 @@
 | 覆盖范围 | **6 个模块 / 7 个接口**（登录、查询、新增、修改、删除、导入、越权） |
 | 单次全量回归 | **约 5.8s**（本地，含数据库造数与清理） |
 | 断言方式 | HTTP 响应断言 + **PyMySQL 数据库断言** 双通道 |
-| 压测结论 | 50 并发 TPS 50.13、P95 1.73s、错误率 0%，**拐点约 30 并发** |
+| 压测结论 | 拐点 **30 并发**（88 TPS 饱和）；20 并发 30 分钟稳定性 **0 错误、P95 6ms、零衰减** |
 
 **三个特点**
 
@@ -64,7 +64,7 @@
 | 数据库校验 | PyMySQL（造数 / 断言 / 清理 / 提取） |
 | 报告 | Allure（step + 附件 + 失败用例留请求响应） |
 | 日志 | logging（控制台 + `log/test.log` 双输出） |
-| 性能测试 | Apache JMeter 5.6.3（命令行非 GUI，阶梯加压） |
+| 性能测试 | Apache JMeter 5.6.3（命令行非 GUI；阶梯 / 尖峰 / 混合 / 稳定性） |
 | CI | GitHub Actions（push 触发依赖安装与用例收集） |
 | 被测系统 | RuoYi-Vue（Spring Boot 4.0.6 + Vue，MySQL 8 + Redis） |
 
@@ -84,7 +84,13 @@ RuoYi_AutoTest/
 ├─ file/
 │  └─ user.xlsx              # 导入接口用的模板文件
 ├─ jmeter/
-│  ├─ ruoyi-login.jmx        # 登录链路压测脚本（登录 + 带 token 查询）
+│  ├─ ruoyi-login.jmx        # 分档负载：10/30/50 线程找拐点
+│  ├─ ruoyi-spike.jmx        # 尖峰：50 线程 Ramp-Up 0 + 同步定时器
+│  ├─ ruoyi-mix.jmx          # 混合场景：6:3:1 业务构成 + 事务控制器
+│  ├─ ruoyi-soak.jmx         # 稳定性：20 线程恒压 30 分钟
+│  ├─ ruoyi-smoke.jmx        # 10 秒冒烟，改配置后先验证
+│  ├─ run-test.ps1           # 一键跑压测 + 生成 HTML 报告
+│  ├─ report.properties      # 报告生成配置（apdex 阈值 / 5s 粒度）
 │  └─ load_baseline.py       # 纯 requests 并发基线脚本
 ├─ perf/                     # 压测原始数据（.jtl）与 HTML 报告
 ├─ testcases/
@@ -234,30 +240,49 @@ Excel 用例行
 
 ---
 
-## 性能测试（JMeter 阶梯压测）
+## 性能测试（五类实验 · JMeter 5.6.3 命令行）
 
-对登录链路（`POST /login` + 带 Token 的 `GET /system/user/list`）做阶梯加压，脚本见 `jmeter/ruoyi-login.jmx`。原始 `.jtl` 与 HTML 报告体积较大，未随仓库收录，按下方命令即可完整复现。
+被测服务与压测机同机（12 核），验证码关闭，全部非 GUI 运行；脚本在 `jmeter/`，一键跑法见 `jmeter/run-test.ps1`。
 
-| 并发 | 样本数 | TPS | 平均(ms) | P95(ms) | 错误率 |
-|---|---|---|---|---|---|
-| 1 | 60 | 7.50 | 132 | 306 | 0.00% |
-| 10 | 200 | 26.96 | 168 | 405 | 0.00% |
-| 30 | 600 | 41.08 | 498 | 1196 | 0.00% |
-| 50 | 1000 | 50.13 | 751 | 1733 | 0.00% |
+| # | 实验 | 脚本 | 参数 | 结果 |
+|---|---|---|---|---|
+| 1 | 基准 | `ruoyi-login.jmx` | 1 线程 × 30 循环 | 60 样本，TPS 7.5，avg 132ms，P95 306ms |
+| 2 | 分档负载 | `ruoyi-login.jmx` | 10 / 30 / 50 线程，各 60s（Ultimate Thread Group） | TPS **50 → 88 → 84**，P95 190 → 545 → **850ms**，错误率 0 |
+| 3 | 尖峰 | `ruoyi-spike.jmx` | 50 线程、Ramp-Up 0、同步定时器 groupSize=50 | 51 样本，50 个请求时间戳跨度 **58ms**，P95 180ms |
+| 4 | 混合场景 | `ruoyi-mix.jmx` | 20 线程 × 60 循环，吞吐量控制器 60/30/10，思考 300–800ms | 2401 样本，比例精确 720 / 360 / 120，全 200 |
+| 5 | 稳定性 | `ruoyi-soak.jmx` | 20 线程（拐点 2/3），思考 200–400ms，1800s | **117,439 样本，65.2 TPS，0 错误，avg 5.16ms，P95 6ms，零衰减** |
 
-**结论**：30 → 50 并发，TPS 仅 +22%，平均响应时间 +51%，P95 由 1.2s 升至 1.7s，**拐点在 30 并发附近**；按接口拆分，50 并发下 `/login` 平均 1137ms、`/user/list` 仅 364ms，瓶颈定位为登录路径的密码哈希校验（CPU 密集）而非 SQL。
+**四条结论**
 
-复现命令：
+1. **拐点在 30 并发**：30 → 50 并发，TPS 反降（88 → 84），平均响应 +70%（230 → 390ms），错误率仍为 0 —— 属于"饱和但未崩溃"。
+2. **瓶颈在登录**：50 并发下 `/login` 平均 1137ms、`/user/list` 仅 364ms，登录的密码哈希校验是 CPU 密集型，不是 SQL。
+3. **瞬时并发 ≠ 持续并发**：50 个请求在同一时刻到达（时间戳跨度 58ms）时 P95 仅 180ms，远低于 50 线程持续压的 850ms —— 秒杀类场景要看"同时到达"，不是"同时在线"。
+4. **稳定性无劣化**：20 并发恒压 30 分钟，TPS 全程 65.2 波动 < 0.5%，P95 恒定 6ms，错误率 0，客户端视角无性能衰减。
 
-```bash
-# 先关闭验证码（测试环境）
-mysql -uroot -p -e "UPDATE ry_vue.sys_config SET config_value='false' WHERE config_key='sys.account.captchaEnabled';"
+### 稳定性走势（20 并发 × 30 分钟）
 
-jmeter -n -t jmeter/ruoyi-login.jmx -Jthreads=50 -Jloops=10 -l perf/s2_50.jtl
-jmeter -g perf/s2_50.jtl -o perf/report_50
+![soak 稳定性压测走势](docs/images/06-soak-tps.png)
+
+上图由 `ruoyi-soak.jmx` 的原始 `.jtl` 按 1 分钟粒度汇总：TPS 从第 1 分钟起贴住 65（首点为前 10 秒爬坡），30 分钟内无下滑；P95 恒为 6ms，无爬升；错误率 0.00%。**客户端视角未见性能劣化。**
+
+### 复现
+
+```powershell
+# 一条命令：清旧数据 → 压测 → 生成 HTML 报告
+cd jmeter
+.\run-test.ps1 -Jmx ".\ruoyi-soak.jmx"
+
+# 或手工三步
+jmeter -n -t jmeter/ruoyi-spike.jmx -l perf/spike.jtl
+jmeter -g perf/spike.jtl -o perf/report_spike -p perf/report.properties
 ```
 
-> 注：`-e -o` 与本机 JMeter 5.6.3 偶发冲突（生成 0 样本 + NPE），先写 `.jtl`、再用 `-g` 生成 HTML 更稳。
+两个必踩的坑（已在脚本里规避）：
+
+- **`.jtl` 是追加写入**：跑前必须删旧文件，否则新旧数据混在一起，TPS 和报告时长都会错；
+- **报告要求 `responseMessage` 列**：脚本保存配置里 `<message>` 必须为 `true`，否则报 `Mismatch between expected number of columns`。
+
+> 原始 `.jtl` 与 HTML 报告体积较大（soak 单次 16MB），未随仓库收录；按上面命令 30 分钟内可完整复现。
 
 ---
 
@@ -287,11 +312,13 @@ jmeter -g perf/s2_50.jtl -o perf/report_50
 
 - [x] HTTP + 数据库双通道断言
 - [x] 接口依赖自动传参（JSON / SQL 提取）
-- [x] 性能测试：JMeter 阶梯压测登录链路，输出 TPS / P95 与瓶颈分析
+- [x] 性能测试：JMeter 五类实验（基准 / 阶梯 / 尖峰 / 混合 / 稳定性），输出 TPS、P95、拐点与稳定性结论
 - [x] CI：push 触发依赖安装与用例收集
 - [ ] 接入 **docker compose** 在 CI 中拉起后端，让 `api-test` job 真正跑绿
 - [ ] 改造成 **YAML/DB 数据源**，支持多环境切换（dev/test）
 - [ ] 增加**接口文档驱动**：从 `/v3/api-docs`（springdoc）自动生成参数级用例骨架（`tools/gen_cases_from_openapi.py` 已完成原型）
+- [ ] 压力测试到崩溃点（200/300 并发）与恢复验证
+- [ ] CSV 参数化（账号池 user01-03）
 - [ ] 失败重试与用例级超时控制
 
 ---
